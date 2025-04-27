@@ -1,0 +1,175 @@
+---
+```{r}
+BreastCancer <- read.csv('/Users/dmitriykruglov/Downloads/wisconsin_breast_cancer.csv')
+
+head(BreastCancer)
+```
+#препроцессинг
+```{r}
+BreastCancer <- subset(BreastCancer, select = -X)
+BreastCancer <- subset(BreastCancer, select = -id)
+```
+
+```{r}
+BreastCancer$diagnosis <- as.factor(BreastCancer$diagnosis)
+```
+# стандартизация 
+```{r}
+numeric_cols <- names(BreastCancer)[sapply(BreastCancer, is.numeric)]  
+BreastCancer[numeric_cols] <- scale(BreastCancer[numeric_cols])
+```
+#модели
+```{r}
+# Модель 1: radius_mean ~ area_mean
+model1 <- lm(radius_mean ~ area_mean, data = BreastCancer)
+summary(model1)
+plot(BreastCancer$area_mean, BreastCancer$radius_mean, main = "Радиус vs Площадь")
+abline(model1, col = "red")
+```
+```{r}
+# Модель 2: radius_mean ~ perimeter_mean
+model2 <- lm(radius_mean ~ perimeter_mean, data = BreastCancer)
+summary(model2)
+plot(BreastCancer$perimeter_mean, BreastCancer$radius_mean, main = "Радиус vs Периметр")
+abline(model2, col = "blue")
+```
+```{r}
+# Модель 3: radius_mean ~ symmetry_mean
+model3 <- lm(radius_mean ~ symmetry_mean, data = BreastCancer)
+summary(model3)
+plot(BreastCancer$symmetry_mean, BreastCancer$radius_mean, main = "Радиус vs Симметричность")
+abline(model3, col = "green")
+```
+# в первой и второй модели Multiple R-squared близок к единице, а в третьей ближе к нулю - слабая зависимость
+```{r}
+ggplot(BreastCancer, aes(x = area_mean, y = perimeter_mean, color = radius_mean)) +
+  geom_point(alpha = 0.7) +
+  scale_color_viridis_c() +  # Цветовая шкала
+  labs(title = "Зависимость radius_mean от area_mean и perimeter_mean",
+       x = "Площадь", y = "Периметр", color = "Радиус") +
+  theme_minimal()
+```
+# 2 задача
+
+```{r}
+BreastCancer$diagnosis_num <- as.numeric(BreastCancer$diagnosis) - 1
+```
+# радиус
+```{r}
+model_radius <- glm(diagnosis_num ~ radius_mean, 
+                   data = BreastCancer, 
+                   family = binomial(link = "logit"))
+
+# График
+ggplot(BreastCancer, aes(x = radius_mean, y = diagnosis_num)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "glm", 
+              method.args = list(family = "binomial"), 
+              color = "red", se = TRUE) +
+  labs(title = "Вероятность злокачественной опухоли vs радиус",
+       x = "Средний радиус (radius_mean)", 
+       y = "Вероятность (M=1)") +
+  theme_minimal()
+```
+```{r}
+model_area <- glm(diagnosis_num ~ area_mean, data = BreastCancer, family = binomial)
+model_texture <- glm(diagnosis_num ~ texture_mean, data = BreastCancer, family = binomial)
+```
+```{r}
+model_combined <- glm(diagnosis_num ~ radius_mean + area_mean + texture_mean, 
+                     data = BreastCancer, 
+                     family = binomial)
+summary(model_combined)
+
+# больше визуализации
+BreastCancer$prob <- predict(model_combined, type = "response")
+
+
+grid <- expand.grid(
+  radius_mean = seq(min(BreastCancer$radius_mean), max(BreastCancer$radius_mean), length.out = 100),
+  area_mean = seq(min(BreastCancer$area_mean), max(BreastCancer$area_mean), length.out = 100),
+  texture_mean = mean(BreastCancer$texture_mean)  # Фиксируем среднее значение текстуры
+)
+
+# Делаем предсказания
+grid$prob <- predict(model_combined, newdata = grid, type = "response")
+
+# Контурный график
+ggplot(grid, aes(x = radius_mean, y = area_mean)) +
+  geom_contour_filled(aes(z = prob), bins = 10) +
+  geom_point(data = BreastCancer, aes(color = as.factor(diagnosis_num)), alpha = 0.3) +
+  scale_fill_viridis_d(option = "plasma") +
+  scale_color_manual(values = c("blue", "red")) +
+  labs(title = "Вероятность злокачественной опухоли",
+       x = "Средний радиус", 
+       y = "Средняя площадь",
+       fill = "Вероятность",
+       color = "Диагноз") +
+  theme_minimal()
+# наибольший радиус ( верхний угол) больше соответствует злокачественности
+```
+```{r}
+#roc для всех
+  calc_auc <- function(model, data) {
+  prob <- predict(model, type = "response")
+  roc_obj <- roc(data$diagnosis_num ~ prob)
+  return(auc(roc_obj))
+}
+
+
+auc_radius <- calc_auc(model_radius, BreastCancer)
+auc_area <- calc_auc(model_area, BreastCancer)
+auc_texture <- calc_auc(model_texture, BreastCancer)
+auc_combined <- calc_auc(model_combined, BreastCancer)
+
+cat("AUC для radius_mean:", round(auc_radius, 3), "\n",
+    "AUC для area_mean:", round(auc_area, 3), "\n",
+    "AUC для texture_mean:", round(auc_texture, 3), "\n",
+    "AUC для комбинированной модели:", round(auc_combined, 3))
+    
+prob_combined <- predict(model_combined, type = "response")
+
+# ROC-кривая
+roc_combined <- roc(BreastCancer$diagnosis_num ~ prob_combined)
+
+
+plot(roc_combined, 
+     main = "ROC-кривая (Комбинированная модель)",
+     col = "blue",
+     print.auc = TRUE, 
+     auc.polygon = TRUE,
+     legacy.axes = TRUE)  # Ось X = FPR (False Positive Rate)
+    
+```
+
+# третья задача
+```{r}
+HR <- 2.0          # Hazard Ratio (золотой стандарт / новая терапия)
+d <- 0.8           # Доля пациентов с событием (инфекцией)
+p1 <- p2 <- 0.5    # Соотношение групп
+alpha <- 0.05      # Уровень значимости (двусторонний)
+power <- 0.8       # Мощность (1 - beta)
+
+# Критические значения Z-распределения
+z_alpha <- qnorm(1 - alpha / 2)  # Двусторонний тест
+z_beta <- qnorm(power)
+
+# Логарифм HR
+log_HR <- log(HR)
+
+# Расчет размера выборки на одну группу
+n_per_group <- (z_alpha + z_beta)^2 / (p1 * p2 * (log_HR)^2 * d)
+
+# Общий размер выборки (две группы)
+total_n <- n_per_group * 2
+
+# Округление вверх до целого числа
+n_per_group <- ceiling(n_per_group)
+total_n <- ceiling(total_n)
+
+# Вывод результатов
+cat("Необходимый размер выборки на одну группу:", n_per_group, "\n")
+cat("Общий размер выборки (2 группы):", total_n, "\n")
+```
+
+
